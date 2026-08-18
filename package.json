@@ -1,0 +1,21 @@
+{
+  "name": "deahades-bots",
+  "version": "1.0.0",
+  "description": "DeaHades 30 AI Minecraft Companions Cluster",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "mineflayer": "^4.20.1",
+    "mineflayer-pathfinder": "^2.4.5",
+    "mineflayer-auto-eat": "^3.3.4",
+    "mineflayer-armor-manager": "^2.0.1",
+    "mineflayer-pvp": "^1.3.2",
+    "minecraft-data": "^3.69.0",
+    "vec3": "^0.1.8"
+  }
+}
