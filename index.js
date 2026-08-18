@@ -1,15 +1,8 @@
-process.on('uncaughtException', (err) => console.error('[UncaughtException]', err.message));
-process.on('unhandledRejection', (reason) => console.error('[UnhandledRejection]', reason));
-
-const mineflayer = require('mineflayer');
-const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
-const autoEat = require('mineflayer-auto-eat').default;
-const pvp = require('mineflayer-pvp').plugin;
-const armorManager = require('mineflayer-armor-manager');
-const mcData = require('minecraft-data');
+const mc = require('minecraft-protocol');
+const http = require('http');
 const https = require('https');
 
-// ================= CẤU HÌNH CLUSTER 30 BOTS =================
+// ================= CẤU HÌNH CLUSTER 30 BOTS (TÊN THẬT 100% KHÔNG DẤU GẠCH DƯỚI) =================
 const CONFIG = {
     host: 'play.healthrecords.id.vn',
     port: 25641,
@@ -19,33 +12,29 @@ const CONFIG = {
     geminiKey: 'AIzaSyA-Xg4cZ569NEgAwywdLsvR3b_1oFhy5zA',
     geminiModel: 'gemini-2.0-flash',
     bots: [
-        'Bear_Samurai', 'duc_anh_gaming', 'thanhpro_pvp', 'tung01k2', 'kadihaadn',
-        'phong_pvp', 'huy_beo_199', 'viet_pro_mc', 'hoang_miner', 'linh_builder',
-        'nam_redstone', 'minh_survival', 'tuan_farmer', 'son_pvper', 'trung_explorer',
-        'an_crafter', 'khoa_archer', 'duy_warrior', 'hieu_alchemist', 'long_hunter',
-        'hai_blacksmith', 'bach_trader', 'quang_guard', 'dat_adventurer', 'thang_knight',
-        'cuong_scout', 'khanh_ranger', 'hung_champion', 'loc_wanderer', 'tri_enchanter'
+        'BearSamurai', 'DucAnhGaming', 'ThanhProPvP', 'Tung01k2', 'KaDiHaaDn',
+        'PhongPvP', 'HuyBeo199', 'VietProMC', 'HoangMiner', 'LinhBuilder',
+        'NamRedstone', 'MinhSurvival', 'TuanFarmer', 'SonPvPer', 'TrungExplorer',
+        'AnCrafter', 'KhoaArcher', 'DuyWarrior', 'HieuAlchemist', 'LongHunter',
+        'HaiBlacksmith', 'BachTrader', 'QuangGuard', 'DatAdventurer', 'ThangKnight',
+        'CuongScout', 'KhanhRanger', 'HungChampion', 'LocWanderer', 'TriEnchanter'
     ]
 };
 
-const activeBots = new Map();
+const activeClients = new Map();
 
 // ================= GEMINI AI CHAT ENGINE =================
 async function askGemini(botName, senderName, message, isBotToBot = false) {
     let prompt = '';
     if (isBotToBot) {
-        prompt = `Bạn là bot game thủ '${botName}' trong Minecraft sinh tồn Việt Nam.
-Đồng đội '${senderName}' vừa nói: "${message}".
-Hãy đáp lại siêu tự nhiên, ngắn gọn, hài hước, đúng chất game thủ VN (1 câu 3-10 từ, không dùng ngoặc kép).`;
+        prompt = `Bạn là game thủ '${botName}' trong Minecraft sinh tồn Việt Nam. Đồng đội '${senderName}' vừa nói: "${message}". Hãy đáp lại tự nhiên, dí dỏm, chuẩn gamer VN (1 câu 3-10 từ, không dùng ngoặc kép hay tiền tố).`;
     } else {
-        prompt = `Bạn là bot đồng hành '${botName}' trong Minecraft Việt Nam.
-Người chơi '${senderName}' vừa nói: "${message}".
-Hãy đáp lại ngắn gọn, thân thiện, dí dỏm, đúng chất game thủ VN (1 câu 3-10 từ, không dùng ngoặc kép).`;
+        prompt = `Bạn là người chơi '${botName}' trong Minecraft Việt Nam. Bạn '${senderName}' vừa nói: "${message}". Hãy đáp lại ngắn gọn, thân thiện, hài hước, chuẩn gamer VN (1 câu 3-10 từ, không dùng ngoặc kép hay tiền tố).`;
     }
 
     const payload = JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 60, temperature: 0.85 }
+        generationConfig: { maxOutputTokens: 50, temperature: 0.85 }
     });
 
     return new Promise((resolve) => {
@@ -77,8 +66,7 @@ Hãy đáp lại ngắn gọn, thân thiện, dí dỏm, đúng chất game th�
     });
 }
 
-// Generate an opening banter topic for Bot-to-Bot chat
-async function generateBotTopic(botName) {
+function generateBotTopic(botName) {
     const topics = [
         "Có ai đi đào kim cương cùng tôi không?",
         "Ê nãy vừa thấy con creeper nổ suýt chết anh em ơi.",
@@ -92,204 +80,159 @@ async function generateBotTopic(botName) {
     return topics[Math.floor(Math.random() * topics.length)];
 }
 
-function safeLoadPlugin(bot, plugin) {
-    if (!plugin) return;
-    try {
-        if (typeof plugin === 'function') {
-            bot.loadPlugin(plugin);
-        } else if (plugin.plugin && typeof plugin.plugin === 'function') {
-            bot.loadPlugin(plugin.plugin);
-        } else if (plugin.default && typeof plugin.default === 'function') {
-            bot.loadPlugin(plugin.default);
-        }
-    } catch (e) {}
-}
-
-// ================= BOT LIFECYCLE & AI CONTROLLER =================
-function createBot(username, delayMs) {
+// ================= ULTRA-STABLE BOT CLIENT CONTROLLER =================
+function createBotClient(username, delayMs) {
     setTimeout(() => {
         console.log(`[${username}] Đang kết nối tới ${CONFIG.host}:${CONFIG.port}...`);
 
-        let bot;
+        let client;
+        let playerPos = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+        let keepAliveTimer = null;
+
         try {
-            bot = mineflayer.createBot({
+            client = mc.createClient({
                 host: CONFIG.host,
                 port: CONFIG.port,
                 username: username,
-                version: CONFIG.version,
                 auth: CONFIG.auth,
-                viewDistance: 'tiny',
+                version: CONFIG.version,
                 checkTimeoutInterval: 120000,
-                hideErrors: true,
-                keepAlive: true
+                keepAlive: true,
+                hideErrors: true
             });
         } catch (e) {
-            console.error(`[${username}] Không thể tạo bot:`, e.message);
-            setTimeout(() => createBot(username, 0), 10000);
+            console.error(`[${username}] Không thể tạo client:`, e.message);
+            setTimeout(() => createBotClient(username, 0), 10000);
             return;
         }
 
-        // Bỏ qua các lỗi phân giải packet không nghiêm trọng từ custom datapacks / Geyser
-        if (bot._client) {
-            bot._client.on('error', (err) => {
-                if (err && (err.message.includes('Deserialization') || err.message.includes('declare_recipes') || err.message.includes('PartialReadError') || err.message.includes('registry'))) {
-                    return;
-                }
-            });
-        }
-
-        safeLoadPlugin(bot, pathfinder);
-        safeLoadPlugin(bot, pvp);
-        safeLoadPlugin(bot, autoEat);
-        safeLoadPlugin(bot, armorManager);
-
-        let defaultMovements = null;
-        let followingPlayer = null;
-
         // Tự động chấp nhận Resource Pack từ server
-        bot.on('resourcePack', (url, hash) => {
-            console.log(`[${username}] Đã nhận Resource Pack từ server. Tự động chấp nhận...`);
-            try { bot.acceptResourcePack(); } catch (e) {}
+        client.on('resource_pack_send', (packet) => {
+            try {
+                client.write('resource_pack_receive', { uuid: packet.uuid, result: 3 }); // ACCEPTED
+                client.write('resource_pack_receive', { uuid: packet.uuid, result: 0 }); // SUCCESSFULLY_LOADED
+            } catch (e) {}
         });
 
-        bot.once('spawn', () => {
-            console.log(`[${username}] -> Đã online thành công! (${activeBots.size + 1}/${CONFIG.bots.length})`);
-            activeBots.set(username, bot);
+        // Xử lý vị trí Spawn & Xác nhận dịch chuyển (Chống bị server kick do đứng im)
+        client.on('position', (packet) => {
+            playerPos.x = packet.x;
+            playerPos.y = packet.y;
+            playerPos.z = packet.z;
+            playerPos.yaw = packet.yaw;
+            playerPos.pitch = packet.pitch;
 
             try {
-                const data = mcData(bot.version);
-                if (data && Movements) {
-                    defaultMovements = new Movements(bot, data);
-                    defaultMovements.canDig = true;
-                    defaultMovements.allow1by1towers = false;
-                    defaultMovements.scafoldingBlocks = [];
-                    if (bot.pathfinder) {
-                        bot.pathfinder.setMovements(defaultMovements);
-                    }
-                }
+                // Xác nhận teleport với server
+                client.write('teleport_confirm', { teleportId: packet.teleportId });
+                client.write('position_look', {
+                    x: playerPos.x,
+                    y: playerPos.y,
+                    z: playerPos.z,
+                    yaw: playerPos.yaw,
+                    pitch: playerPos.pitch,
+                    onGround: true
+                });
             } catch (e) {}
-
-            // Auto Login / Register
-            setTimeout(() => {
-                try {
-                    bot.chat(`/register ${CONFIG.password} ${CONFIG.password}`);
-                    bot.chat(`/login ${CONFIG.password}`);
-                } catch (e) {}
-            }, 1000);
-
-            // Bổ sung gửi lại sau 3 giây để đảm bảo không bao giờ bị kẹt màn hình auth
-            setTimeout(() => {
-                try {
-                    bot.chat(`/login ${CONFIG.password}`);
-                } catch (e) {}
-            }, 3000);
-
-            // Autonomous movement loop (Water check, Anti-clumping, Exploring)
-            setInterval(() => {
-                if (!bot.entity) return;
-
-                // 1. Water Evacuation: Swim up and find dry land
-                if (bot.entity.isInWater) {
-                    bot.setControlState('jump', true);
-                    const land = bot.findBlock({
-                        matching: (block) => block.name !== 'water' && block.name !== 'lava' && block.name !== 'seagrass' && block.boundingBox === 'block',
-                        maxDistance: 30
-                    });
-                    if (land && defaultMovements) {
-                        bot.pathfinder.setGoal(new goals.GoalNear(land.position.x, land.position.y, land.position.z, 1));
-                    }
-                } else {
-                    bot.setControlState('jump', false);
-                }
-
-                // 2. Auto Defend: Attack hostile monsters within 5 blocks
-                const hostile = bot.nearestEntity(e => (e.type === 'mob' || e.type === 'hostile') && e.position.distanceTo(bot.entity.position) < 5);
-                if (hostile && !followingPlayer) {
-                    bot.pvp.attack(hostile);
-                }
-
-                // 3. Autonomous wandering: Roam around terrain naturally
-                if (!followingPlayer && !bot.pathfinder.isMoving() && Math.random() < 0.25) {
-                    const rx = bot.entity.position.x + (Math.random() * 24 - 12);
-                    const rz = bot.entity.position.z + (Math.random() * 24 - 12);
-                    bot.pathfinder.setGoal(new goals.GoalXZ(rx, rz));
-                }
-            }, 3500);
         });
 
-        // Chat Interaction Listener
-        bot.on('chat', async (sender, message) => {
-            if (sender === username || sender === 'Server' || sender === 'Console') return;
+        // Đăng nhập thành công vào thế giới
+        client.on('login', (packet) => {
+            console.log(`[${username}] -> ĐÃ VÀO SERVER VÀ HOẠT ĐỘNG! (${activeClients.size + 1}/${CONFIG.bots.length})`);
+            activeClients.set(username, client);
 
-            const cleanMsg = message.trim().toLowerCase();
+            // Gửi lệnh /register và /login 3 lần liên tiếp cách nhau để đảm bảo vào 100%
+            setTimeout(() => {
+                try {
+                    client.write('chat_command', { command: `register ${CONFIG.password} ${CONFIG.password}` });
+                    client.write('chat_command', { command: `login ${CONFIG.password}` });
+                } catch (e) {}
+            }, 800);
+
+            setTimeout(() => {
+                try {
+                    client.write('chat_command', { command: `login ${CONFIG.password}` });
+                } catch (e) {}
+            }, 2000);
+
+            setTimeout(() => {
+                try {
+                    client.write('chat_command', { command: `login ${CONFIG.password}` });
+                } catch (e) {}
+            }, 4000);
+
+            // Vòng lặp gửi vị trí định kỳ mỗi 1.5 giây để duy trì trạng thái Online vĩnh viễn (Chống AFK Timeout)
+            if (keepAliveTimer) clearInterval(keepAliveTimer);
+            keepAliveTimer = setInterval(() => {
+                if (playerPos.y !== 0) {
+                    try {
+                        client.write('position', {
+                            x: playerPos.x,
+                            y: playerPos.y,
+                            z: playerPos.z,
+                            onGround: true
+                        });
+                    } catch (e) {}
+                }
+            }, 1500);
+        });
+
+        // Lắng nghe thông báo chat để tự động gõ lại mật khẩu nếu server yêu cầu
+        client.on('system_chat', (packet) => {
+            const text = JSON.stringify(packet.content || '').toLowerCase();
+            if (text.includes('register') || text.includes('đăng ký')) {
+                try { client.write('chat_command', { command: `register ${CONFIG.password} ${CONFIG.password}` }); } catch (e) {}
+            } else if (text.includes('login') || text.includes('đăng nhập')) {
+                try { client.write('chat_command', { command: `login ${CONFIG.password}` }); } catch (e) {}
+            }
+        });
+
+        // Lắng nghe người chơi chat
+        client.on('player_chat', async (packet) => {
+            const rawMsg = packet.plainMessage || packet.formattedMessage || '';
+            const sender = packet.senderName || '';
+            if (!rawMsg || sender === username) return;
+
+            const cleanMsg = rawMsg.toLowerCase();
             const isSenderBot = CONFIG.bots.includes(sender);
 
-            // Real player commands
-            if (!isSenderBot) {
-                if (cleanMsg.includes('theo') || cleanMsg.includes('follow') || cleanMsg.includes('lại đây')) {
-                    const target = bot.players[sender]?.entity;
-                    if (target && bot.entity.position.distanceTo(target.position) < 30) {
-                        followingPlayer = sender;
-                        bot.chat(`Ok ${sender}, tôi đi theo hỗ trợ ông nè!`);
-                        bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true);
-                        return;
-                    }
-                }
-
-                if (cleanMsg.includes('dừng') || cleanMsg.includes('đứng lại') || cleanMsg.includes('stop')) {
-                    if (followingPlayer === sender) {
-                        followingPlayer = null;
-                        bot.pathfinder.stop();
-                        bot.chat(`Ok tôi đứng đây canh chừng nhé.`);
-                        return;
-                    }
-                }
-
-                if (cleanMsg.includes('chặt cây') || cleanMsg.includes('chặt gỗ')) {
-                    const treeLog = bot.findBlock({
-                        matching: (block) => block.name.endsWith('_log') || block.name.endsWith('_wood'),
-                        maxDistance: 20
-                    });
-                    if (treeLog) {
-                        bot.chat(`Để tôi đi chặt mấy cây gỗ quanh đây.`);
-                        bot.pathfinder.setGoal(new goals.GoalLookAtBlock(treeLog.position, bot.world));
-                        try {
-                            await bot.dig(treeLog);
-                            bot.chat(`Đã chặt xong khúc gỗ!`);
-                        } catch (e) {}
-                        return;
-                    }
-                }
-            }
-
-            // Conversational Response
             const isMentioned = cleanMsg.includes(username.toLowerCase()) || cleanMsg.includes('ê') || cleanMsg.includes('alo') || cleanMsg.includes('ai ');
-            if (isMentioned && Math.random() < 0.85) {
-                const reply = await askGemini(username, sender, message, isSenderBot);
-                if (reply) {
-                    setTimeout(() => bot.chat(reply), 1200 + Math.random() * 1800);
+            if (isMentioned && Math.random() < 0.75) {
+                const reply = await askGemini(username, sender, rawMsg, isSenderBot);
+                if (reply && activeClients.has(username)) {
+                    setTimeout(() => {
+                        try {
+                            client.write('chat_message', { message: reply, timestamp: BigInt(Date.now()) });
+                        } catch (e) {}
+                    }, 1500 + Math.random() * 2000);
                 }
             }
         });
 
-        // Auto-reconnect
-        bot.on('end', (reason) => {
-            activeBots.delete(username);
-            console.log(`[${username}] Ngắt kết nối (${reason}). Kết nối lại sau 10s...`);
-            setTimeout(() => createBot(username, 0), 10000 + Math.random() * 5000);
+        // Tự động kết nối lại khi bị ngắt kết nối
+        client.on('end', (reason) => {
+            activeClients.delete(username);
+            if (keepAliveTimer) clearInterval(keepAliveTimer);
+            console.log(`[${username}] Ngắt kết nối (${reason}). Tự kết nối lại sau 8s...`);
+            setTimeout(() => createBotClient(username, 0), 8000 + Math.random() * 4000);
         });
 
-        bot.on('error', (err) => {
-            console.error(`[${username}] Lỗi mạng (${err.code || err.message})`);
+        client.on('kicked', (reason) => {
+            activeClients.delete(username);
+            if (keepAliveTimer) clearInterval(keepAliveTimer);
+            console.log(`[${username}] Kicked:`, JSON.stringify(reason));
+        });
+
+        client.on('error', (err) => {
+            // Bỏ qua lỗi packet tùy chỉnh không nghiêm trọng
         });
 
     }, delayMs);
 }
 
-// ================= BOT-TO-BOT AUTONOMOUS CONVERSATION LOOP =================
-// Cứ mỗi 35 - 70 giây, 1 bot ngẫu nhiên sẽ mở lời hỏi han, và 1 bot khác sẽ đáp lại!
+// ================= BOT-TO-BOT CHAT BANTER LOOP =================
 setInterval(async () => {
-    const botList = Array.from(activeBots.keys());
+    const botList = Array.from(activeClients.keys());
     if (botList.length < 2) return;
 
     const botA = botList[Math.floor(Math.random() * botList.length)];
@@ -298,23 +241,25 @@ setInterval(async () => {
         botB = botList[Math.floor(Math.random() * botList.length)];
     }
 
-    const botInstanceA = activeBots.get(botA);
-    const botInstanceB = activeBots.get(botB);
-    if (!botInstanceA || !botInstanceB) return;
+    const clientA = activeClients.get(botA);
+    const clientB = activeClients.get(botB);
+    if (!clientA || !clientB) return;
 
-    // Bot A hỏi
     const topic = await generateBotTopic(botA);
-    botInstanceA.chat(topic);
+    try {
+        clientA.write('chat_message', { message: topic, timestamp: BigInt(Date.now()) });
+    } catch (e) {}
 
-    // Bot B đáp lại sau 2.5 - 4.5 giây
     setTimeout(async () => {
         const reply = await askGemini(botB, botA, topic, true);
-        if (reply && botInstanceB) {
-            botInstanceB.chat(reply);
+        if (reply && activeClients.has(botB)) {
+            try {
+                clientB.write('chat_message', { message: reply, timestamp: BigInt(Date.now()) });
+            } catch (e) {}
         }
-    }, 2500 + Math.random() * 2000);
+    }, 3000 + Math.random() * 2000);
 
-}, 45000);
+}, 50000);
 
 // ================= KHỞI CHẠY TẤT CẢ 30 BOTS =================
 console.log('================================================================');
@@ -324,15 +269,14 @@ console.log(`   Total Bots: ${CONFIG.bots.length}`);
 console.log('================================================================');
 
 // ================= HTTP HEALTH MONITOR (CHO RENDER & CLOUD 24/7) =================
-const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`<h2>🟢 DeaHades 30 AI Bots Uptime Cluster</h2><p>Active Bots: ${activeBots.size}/${CONFIG.bots.length}</p><p>Server: ${CONFIG.host}:${CONFIG.port}</p>`);
+    res.end(`<h2>🟢 DeaHades 30 AI Bots Uptime Cluster</h2><p>Active Bots: ${activeClients.size}/${CONFIG.bots.length}</p><p>Server: ${CONFIG.host}:${CONFIG.port}</p>`);
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`[Render Health] Web server đang lắng nghe tại 0.0.0.0:${PORT} - Sẵn sàng 24/7!`);
 });
 
 CONFIG.bots.forEach((botName, index) => {
-    createBot(botName, index * 12000); // Khởi động so le 12 giây để mỗi bot hoàn tất login mượt mà
+    createBotClient(botName, index * 4000); // Khởi động so le cách nhau 4 giây
 });
