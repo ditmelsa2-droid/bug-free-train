@@ -119,13 +119,23 @@ function createBot(username, delayMs) {
                 version: CONFIG.version,
                 auth: CONFIG.auth,
                 viewDistance: 'tiny',
-                checkTimeoutInterval: 60000,
+                checkTimeoutInterval: 120000,
+                hideErrors: true,
                 keepAlive: true
             });
         } catch (e) {
             console.error(`[${username}] Không thể tạo bot:`, e.message);
             setTimeout(() => createBot(username, 0), 10000);
             return;
+        }
+
+        // Bỏ qua các lỗi phân giải packet không nghiêm trọng từ custom datapacks / Geyser
+        if (bot._client) {
+            bot._client.on('error', (err) => {
+                if (err && (err.message.includes('Deserialization') || err.message.includes('declare_recipes') || err.message.includes('PartialReadError') || err.message.includes('registry'))) {
+                    return;
+                }
+            });
         }
 
         safeLoadPlugin(bot, pathfinder);
@@ -135,6 +145,12 @@ function createBot(username, delayMs) {
 
         let defaultMovements = null;
         let followingPlayer = null;
+
+        // Tự động chấp nhận Resource Pack từ server
+        bot.on('resourcePack', (url, hash) => {
+            console.log(`[${username}] Đã nhận Resource Pack từ server. Tự động chấp nhận...`);
+            try { bot.acceptResourcePack(); } catch (e) {}
+        });
 
         bot.once('spawn', () => {
             console.log(`[${username}] -> Đã online thành công! (${activeBots.size + 1}/${CONFIG.bots.length})`);
@@ -155,9 +171,18 @@ function createBot(username, delayMs) {
 
             // Auto Login / Register
             setTimeout(() => {
-                bot.chat(`/register ${CONFIG.password} ${CONFIG.password}`);
-                bot.chat(`/login ${CONFIG.password}`);
-            }, 1200);
+                try {
+                    bot.chat(`/register ${CONFIG.password} ${CONFIG.password}`);
+                    bot.chat(`/login ${CONFIG.password}`);
+                } catch (e) {}
+            }, 1000);
+
+            // Bổ sung gửi lại sau 3 giây để đảm bảo không bao giờ bị kẹt màn hình auth
+            setTimeout(() => {
+                try {
+                    bot.chat(`/login ${CONFIG.password}`);
+                } catch (e) {}
+            }, 3000);
 
             // Autonomous movement loop (Water check, Anti-clumping, Exploring)
             setInterval(() => {
