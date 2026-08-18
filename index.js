@@ -92,25 +92,46 @@ async function generateBotTopic(botName) {
     return topics[Math.floor(Math.random() * topics.length)];
 }
 
+function safeLoadPlugin(bot, plugin) {
+    if (!plugin) return;
+    try {
+        if (typeof plugin === 'function') {
+            bot.loadPlugin(plugin);
+        } else if (plugin.plugin && typeof plugin.plugin === 'function') {
+            bot.loadPlugin(plugin.plugin);
+        } else if (plugin.default && typeof plugin.default === 'function') {
+            bot.loadPlugin(plugin.default);
+        }
+    } catch (e) {}
+}
+
 // ================= BOT LIFECYCLE & AI CONTROLLER =================
 function createBot(username, delayMs) {
     setTimeout(() => {
         console.log(`[${username}] Đang kết nối tới ${CONFIG.host}:${CONFIG.port}...`);
 
-        const bot = mineflayer.createBot({
-            host: CONFIG.host,
-            port: CONFIG.port,
-            username: username,
-            version: CONFIG.version,
-            auth: CONFIG.auth,
-            viewDistance: 'tiny',
-            checkTimeoutInterval: 60000
-        });
+        let bot;
+        try {
+            bot = mineflayer.createBot({
+                host: CONFIG.host,
+                port: CONFIG.port,
+                username: username,
+                version: CONFIG.version,
+                auth: CONFIG.auth,
+                viewDistance: 'tiny',
+                checkTimeoutInterval: 60000,
+                keepAlive: true
+            });
+        } catch (e) {
+            console.error(`[${username}] Không thể tạo bot:`, e.message);
+            setTimeout(() => createBot(username, 0), 10000);
+            return;
+        }
 
-        bot.loadPlugin(pathfinder);
-        bot.loadPlugin(pvp);
-        bot.loadPlugin(autoEat);
-        bot.loadPlugin(armorManager);
+        safeLoadPlugin(bot, pathfinder);
+        safeLoadPlugin(bot, pvp);
+        safeLoadPlugin(bot, autoEat);
+        safeLoadPlugin(bot, armorManager);
 
         let defaultMovements = null;
         let followingPlayer = null;
@@ -120,12 +141,16 @@ function createBot(username, delayMs) {
             activeBots.set(username, bot);
 
             try {
-                const mcData = require('minecraft-data')(bot.version);
-                defaultMovements = new Movements(bot, mcData);
-                defaultMovements.canDig = true;
-                defaultMovements.allow1by1towers = false;
-                defaultMovements.scafoldingBlocks = [];
-                bot.pathfinder.setMovements(defaultMovements);
+                const data = mcData(bot.version);
+                if (data && Movements) {
+                    defaultMovements = new Movements(bot, data);
+                    defaultMovements.canDig = true;
+                    defaultMovements.allow1by1towers = false;
+                    defaultMovements.scafoldingBlocks = [];
+                    if (bot.pathfinder) {
+                        bot.pathfinder.setMovements(defaultMovements);
+                    }
+                }
             } catch (e) {}
 
             // Auto Login / Register
@@ -225,12 +250,12 @@ function createBot(username, delayMs) {
         // Auto-reconnect
         bot.on('end', (reason) => {
             activeBots.delete(username);
-            console.log(`[${username}] Ngắt kết nối (${reason}). Kết nối lại sau 5s...`);
-            setTimeout(() => createBot(username, 0), 5000);
+            console.log(`[${username}] Ngắt kết nối (${reason}). Kết nối lại sau 10s...`);
+            setTimeout(() => createBot(username, 0), 10000 + Math.random() * 5000);
         });
 
         bot.on('error', (err) => {
-            console.error(`[${username}] Lỗi: ${err.message}`);
+            console.error(`[${username}] Lỗi mạng (${err.code || err.message})`);
         });
 
     }, delayMs);
@@ -273,16 +298,16 @@ console.log(`   Target Server: ${CONFIG.host}:${CONFIG.port}`);
 console.log(`   Total Bots: ${CONFIG.bots.length}`);
 console.log('================================================================');
 
-// ================= HTTP HEALTH MONITOR (CHO CLOUD 24/7) =================
+// ================= HTTP HEALTH MONITOR (CHO RENDER & CLOUD 24/7) =================
 const http = require('http');
-const PORT = process.env.PORT || 7860;
+const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`<h2>🟢 DeaHades 30 AI Bots Uptime Cluster</h2><p>Active Bots: ${activeBots.size}/${CONFIG.bots.length}</p><p>Server: ${CONFIG.host}:${CONFIG.port}</p>`);
-}).listen(PORT, () => {
-    console.log(`[Health Monitor] Web server đang lắng nghe tại cổng ${PORT} để giữ Space chạy 24/7!`);
+}).listen(PORT, '0.0.0.0', () => {
+    console.log(`[Render Health] Web server đang lắng nghe tại 0.0.0.0:${PORT} - Sẵn sàng 24/7!`);
 });
 
 CONFIG.bots.forEach((botName, index) => {
-    createBot(botName, index * 3500); // Khởi động so le cách nhau 3.5 giây
+    createBot(botName, index * 6000); // Khởi động so le cách nhau 6 giây để tránh Bukkit throttle
 });
