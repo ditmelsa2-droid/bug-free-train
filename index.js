@@ -334,5 +334,5 @@ http.createServer((req, res) => {
 });
 
 CONFIG.bots.forEach((botName, index) => {
-    createBot(botName, index * 6000); // Khởi động so le cách nhau 6 giây để tránh Bukkit throttle
+    createBot(botName, index * 12000); // Khởi động so le 12 giây để mỗi bot hoàn tất login mượt mà
 });
